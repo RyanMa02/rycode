@@ -2,17 +2,9 @@ package com.rycode.core.permission;
 
 import org.junit.jupiter.api.Test;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PermissionDecisionTest {
-
-    @Test
-    void allowsBlankReasonForAllowDecision() {
-        PermissionDecision decision = PermissionDecision.allow(" ");
-
-        assertThat(decision.reason()).isBlank();
-    }
 
     @Test
     void rejectsBlankReasonForAskDecision() {

@@ -7,6 +7,8 @@ import com.rycode.core.model.ModelClient;
 import com.rycode.core.model.ModelRequest;
 import com.rycode.core.model.ModelResponse;
 import com.rycode.core.permission.PermissionDecision;
+import com.rycode.core.permission.PermissionService;
+import com.rycode.core.permission.UserConfirmationProvider;
 import com.rycode.core.tool.Tool;
 import com.rycode.core.tool.ToolCall;
 import com.rycode.core.tool.ToolDefinition;
@@ -14,10 +16,7 @@ import com.rycode.core.tool.ToolRegistry;
 import com.rycode.core.tool.ToolResult;
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayDeque;
-import java.util.List;
-import java.util.Map;
-import java.util.Queue;
+import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -26,17 +25,8 @@ class AgentRunnerTest {
 
     @Test
     void returnsFinalAnswerWithoutToolUse() {
-        FakeModelClient modelClient = new FakeModelClient(List.of(
-                new ModelResponse(List.of(new TextBlock("Done")))
-        ));
-        AgentRunner runner = new AgentRunner(
-                modelClient,
-                new ToolRegistry(List.of()),
-                toolCall -> PermissionDecision.allow("test"),
-                toolCall -> false,
-                5,
-                10
-        );
+        FakeModelClient modelClient = new FakeModelClient(List.of(textResponse("Done")));
+        AgentRunner runner = newRunner(modelClient, new ToolRegistry(List.of()));
 
         AgentRunResult result = runner.run(new AgentRunRequest("Say hello"));
 
@@ -47,162 +37,94 @@ class AgentRunnerTest {
 
     @Test
     void executesToolAndContinuesUntilFinalAnswer() {
-        ToolUseBlock toolUse = new ToolUseBlock(new ToolCall(
-                "tool-call-1",
-                "echo",
-                Map.of("text", "hello")
-        ));
         FakeModelClient modelClient = new FakeModelClient(List.of(
-                new ModelResponse(List.of(toolUse)),
-                new ModelResponse(List.of(new TextBlock("Tool said hello")))
+                toolUseResponse("tool-call-1", "echo", Map.of("text", "hello")),
+                textResponse("Tool said hello")
         ));
-        AgentRunner runner = new AgentRunner(
-                modelClient,
-                new ToolRegistry(List.of(new EchoTool("echo"))),
-                toolCall -> PermissionDecision.allow("test"),
-                toolCall -> false,
-                5,
-                10
-        );
+        AgentRunner runner = newRunner(modelClient, new ToolRegistry(List.of(new EchoTool("echo"))));
 
         AgentRunResult result = runner.run(new AgentRunRequest("Use echo"));
 
         assertThat(result.finalText()).isEqualTo("Tool said hello");
         assertThat(modelClient.requests()).hasSize(2);
-        assertThat(modelClient.requests().get(1).messages())
-                .anySatisfy(message -> assertThat(message.content())
-                        .contains(new ToolResultBlock(new ToolResult(
-                                "tool-call-1",
-                                true,
-                                "hello",
-                                null
-                        ))));
+        assertToolResult(modelClient, "tool-call-1", true, "hello", null);
     }
 
     @Test
     void asksForConfirmationBeforeExecutingAskDecision() {
-        ToolUseBlock toolUse = new ToolUseBlock(new ToolCall(
-                "tool-call-1",
-                "echo",
-                Map.of("text", "approved")
-        ));
         FakeModelClient modelClient = new FakeModelClient(List.of(
-                new ModelResponse(List.of(toolUse)),
-                new ModelResponse(List.of(new TextBlock("Approved")))
+                toolUseResponse("tool-call-1", "echo", Map.of("text", "approved")),
+                textResponse("Approved")
         ));
-        AgentRunner runner = new AgentRunner(
+        AgentRunner runner = newRunner(
                 modelClient,
                 new ToolRegistry(List.of(new EchoTool("echo"))),
                 toolCall -> PermissionDecision.ask("needs confirmation"),
-                toolCall -> true,
-                5,
-                10
+                toolCall -> true
         );
 
         AgentRunResult result = runner.run(new AgentRunRequest("Use echo"));
 
         assertThat(result.finalText()).isEqualTo("Approved");
         assertThat(modelClient.requests()).hasSize(2);
-        assertThat(modelClient.requests().get(1).messages())
-                .anySatisfy(message -> assertThat(message.content())
-                        .contains(new ToolResultBlock(new ToolResult(
-                                "tool-call-1",
-                                true,
-                                "approved",
-                                null
-                        ))));
+        assertToolResult(modelClient, "tool-call-1", true, "approved", null);
     }
 
     @Test
     void recordsDeniedToolResultWhenConfirmationRejectsAskDecision() {
-        ToolUseBlock toolUse = new ToolUseBlock(new ToolCall(
-                "tool-call-1",
-                "echo",
-                Map.of("text", "rejected")
-        ));
         FakeModelClient modelClient = new FakeModelClient(List.of(
-                new ModelResponse(List.of(toolUse)),
-                new ModelResponse(List.of(new TextBlock("Rejected")))
+                toolUseResponse("tool-call-1", "echo", Map.of("text", "rejected")),
+                textResponse("Rejected")
         ));
-        AgentRunner runner = new AgentRunner(
+        AgentRunner runner = newRunner(
                 modelClient,
                 new ToolRegistry(List.of(new EchoTool("echo"))),
-                toolCall -> PermissionDecision.ask("needs confirmation"),
-                toolCall -> false,
-                5,
-                10
+                toolCall -> PermissionDecision.ask("user declined"),
+                toolCall -> false
         );
 
         AgentRunResult result = runner.run(new AgentRunRequest("Use echo"));
 
         assertThat(result.finalText()).isEqualTo("Rejected");
-        assertThat(modelClient.requests().get(1).messages())
-                .anySatisfy(message -> assertThat(message.content())
-                        .contains(new ToolResultBlock(new ToolResult(
-                                "tool-call-1",
-                                false,
-                                null,
-                                "Permission denied: needs confirmation"
-                        ))));
+        assertToolResult(modelClient, "tool-call-1", false, null, "Permission denied: user declined");
     }
 
     @Test
     void deniesToolWithoutAskingForConfirmationOrExecutingTool() {
-        ToolUseBlock toolUse = new ToolUseBlock(new ToolCall(
-                "tool-call-1",
-                "tracking",
-                Map.of("text", "blocked")
-        ));
         FakeModelClient modelClient = new FakeModelClient(List.of(
-                new ModelResponse(List.of(toolUse)),
-                new ModelResponse(List.of(new TextBlock("Denied")))
+                toolUseResponse("tool-call-1", "tracking", Map.of("text", "blocked")),
+                textResponse("Denied")
         ));
         TrackingTool tool = new TrackingTool();
-        AgentRunner runner = new AgentRunner(
+        AgentRunner runner = newRunner(
                 modelClient,
                 new ToolRegistry(List.of(tool)),
                 toolCall -> PermissionDecision.deny("blocked by rule"),
                 toolCall -> {
                     throw new AssertionError("confirmation should not be requested for DENY");
-                },
-                5,
-                10
+                }
         );
 
         AgentRunResult result = runner.run(new AgentRunRequest("Use tracking"));
 
         assertThat(result.finalText()).isEqualTo("Denied");
         assertThat(tool.executed()).isFalse();
-        assertThat(modelClient.requests().get(1).messages())
-                .anySatisfy(message -> assertThat(message.content())
-                        .contains(new ToolResultBlock(new ToolResult(
-                                "tool-call-1",
-                                false,
-                                null,
-                                "Permission denied: blocked by rule"
-                        ))));
+        assertToolResult(modelClient, "tool-call-1", false, null, "Permission denied: blocked by rule");
     }
 
     @Test
     void allowDoesNotAskForConfirmation() {
-        ToolUseBlock toolUse = new ToolUseBlock(new ToolCall(
-                "tool-call-1",
-                "echo",
-                Map.of("text", "allowed")
-        ));
         FakeModelClient modelClient = new FakeModelClient(List.of(
-                new ModelResponse(List.of(toolUse)),
-                new ModelResponse(List.of(new TextBlock("Allowed")))
+                toolUseResponse("tool-call-1", "echo", Map.of("text", "allowed")),
+                textResponse("Allowed")
         ));
-        AgentRunner runner = new AgentRunner(
+        AgentRunner runner = newRunner(
                 modelClient,
                 new ToolRegistry(List.of(new EchoTool("echo"))),
                 toolCall -> PermissionDecision.allow("allowed by rule"),
                 toolCall -> {
                     throw new AssertionError("confirmation should not be requested for ALLOW");
-                },
-                5,
-                10
+                }
         );
 
         AgentRunResult result = runner.run(new AgentRunRequest("Use echo"));
@@ -212,16 +134,10 @@ class AgentRunnerTest {
 
     @Test
     void exposesToolDefinitionsToModelInRegistrationOrder() {
-        FakeModelClient modelClient = new FakeModelClient(List.of(
-                new ModelResponse(List.of(new TextBlock("Done")))
-        ));
-        AgentRunner runner = new AgentRunner(
+        FakeModelClient modelClient = new FakeModelClient(List.of(textResponse("Done")));
+        AgentRunner runner = newRunner(
                 modelClient,
-                new ToolRegistry(List.of(new EchoTool("first"), new EchoTool("second"))),
-                toolCall -> PermissionDecision.allow("test"),
-                toolCall -> false,
-                5,
-                10
+                new ToolRegistry(List.of(new EchoTool("first"), new EchoTool("second")))
         );
 
         runner.run(new AgentRunRequest("List tools"));
@@ -238,16 +154,9 @@ class AgentRunnerTest {
                         new ToolUseBlock(new ToolCall("tool-call-1", "echo", Map.of("text", "one"))),
                         new ToolUseBlock(new ToolCall("tool-call-2", "echo", Map.of("text", "two")))
                 )),
-                new ModelResponse(List.of(new TextBlock("Done")))
+                textResponse("Done")
         ));
-        AgentRunner runner = new AgentRunner(
-                modelClient,
-                new ToolRegistry(List.of(new EchoTool("echo"))),
-                toolCall -> PermissionDecision.allow("test"),
-                toolCall -> false,
-                5,
-                10
-        );
+        AgentRunner runner = newRunner(modelClient, new ToolRegistry(List.of(new EchoTool("echo"))));
 
         AgentRunResult result = runner.run(new AgentRunRequest("Use echo twice"));
 
@@ -283,10 +192,89 @@ class AgentRunnerTest {
                 .hasMessage("Tool calls per turn exceeded max: 1");
     }
 
+    @Test
+    void recordsFailedToolResultWhenToolIsUnknown() {
+        FakeModelClient modelClient = new FakeModelClient(List.of(
+                toolUseResponse("tool-call-1", "missing", Map.of()),
+                textResponse("Done")
+        ));
+        AgentRunner runner = newRunner(modelClient, new ToolRegistry(List.of()));
+
+        AgentRunResult result = runner.run(new AgentRunRequest("Use missing tool"));
+
+        assertThat(result.finalText()).isEqualTo("Done");
+        assertToolResult(modelClient, "tool-call-1", false, null, "Tool not found: missing");
+    }
+
+    @Test
+    void stopsWhenAgentLoopExceedsMaxIterations() {
+        FakeModelClient modelClient = new FakeModelClient(List.of(
+                toolUseResponse("tool-call-1", "echo", Map.of("text", "one")),
+                toolUseResponse("tool-call-2", "echo", Map.of("text", "two"))
+        ));
+        AgentRunner runner = new AgentRunner(
+                modelClient,
+                new ToolRegistry(List.of(new EchoTool("echo"))),
+                toolCall -> PermissionDecision.allow("test"),
+                toolCall -> false,
+                2,
+                10
+        );
+
+        assertThatThrownBy(() -> runner.run(new AgentRunRequest("Keep using tools")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Agent loop exceeded max iterations: 2");
+    }
+
+    private static AgentRunner newRunner(FakeModelClient modelClient, ToolRegistry toolRegistry) {
+        return newRunner(
+                modelClient,
+                toolRegistry,
+                toolCall -> PermissionDecision.allow("test"),
+                toolCall -> false
+        );
+    }
+
+    private static AgentRunner newRunner(
+            FakeModelClient modelClient,
+            ToolRegistry toolRegistry,
+            PermissionService permissionService,
+            UserConfirmationProvider confirmationProvider
+    ) {
+        return new AgentRunner(
+                modelClient,
+                toolRegistry,
+                permissionService,
+                confirmationProvider,
+                5,
+                10
+        );
+    }
+
+    private static ModelResponse textResponse(String text) {
+        return new ModelResponse(List.of(new TextBlock(text)));
+    }
+
+    private static ModelResponse toolUseResponse(String id, String name, Map<String, Object> input) {
+        return new ModelResponse(List.of(new ToolUseBlock(new ToolCall(id, name, input))));
+    }
+
+    private static void assertToolResult(
+            FakeModelClient modelClient,
+            String toolCallId,
+            boolean success,
+            String output,
+            String error
+    ) {
+        assertThat(modelClient.requests().get(1).messages())
+                .anySatisfy(message -> assertThat(message.content())
+                        .contains(new ToolResultBlock(new ToolResult(toolCallId, success, output, error))));
+    }
+
     private static final class FakeModelClient implements ModelClient {
 
         private final Queue<ModelResponse> responses;
-        private final List<ModelRequest> requests = new java.util.ArrayList<>();
+        private final List<ModelRequest> requests = new ArrayList<>();
 
         private FakeModelClient(List<ModelResponse> responses) {
             this.responses = new ArrayDeque<>(responses);

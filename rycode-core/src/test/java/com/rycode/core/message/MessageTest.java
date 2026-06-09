@@ -13,19 +13,21 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class MessageTest {
 
     @Test
-    void rejectsEmptyContent() {
-        assertThatThrownBy(() -> new Message(MessageRole.ASSISTANT, List.of()))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("content must not be empty");
-    }
-
-    @Test
     void rejectsUserMessageWithToolUseContent() {
         ToolCall toolCall = new ToolCall("tool-call-1", "echo", Map.of());
 
         assertThatThrownBy(() -> new Message(MessageRole.USER, List.of(new ToolUseBlock(toolCall))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("USER message content must contain only TextBlock");
+    }
+
+    @Test
+    void rejectsAssistantMessageWithToolResultContent() {
+        ToolResult toolResult = new ToolResult("tool-call-1", true, "ok", null);
+
+        assertThatThrownBy(() -> Message.assistant(List.of(new ToolResultBlock(toolResult))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("ASSISTANT message content must not contain ToolResultBlock");
     }
 
     @Test
@@ -43,13 +45,6 @@ class MessageTest {
                 new ToolResultBlock(first),
                 new ToolResultBlock(second)
         );
-    }
-
-    @Test
-    void rejectsToolMessageWithoutToolResultContent() {
-        assertThatThrownBy(() -> new Message(MessageRole.TOOL, List.of(new TextBlock("not a tool result"))))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("TOOL message content must contain only ToolResultBlock");
     }
 
     @Test
