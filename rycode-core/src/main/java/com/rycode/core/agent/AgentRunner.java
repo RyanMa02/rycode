@@ -67,7 +67,7 @@ public final class AgentRunner {
 
             List<ToolUseBlock> toolUses = extractToolUseBlocks(response);
             if (toolUses.isEmpty()) {
-                return new AgentRunResult(finalText(response), messages);
+                return new AgentRunResult(extractFinalText(response), messages);
             }
             if (toolUses.size() > maxToolCallsPerTurn) {
                 throw new IllegalStateException("Tool calls per turn exceeded max: " + maxToolCallsPerTurn);
@@ -111,7 +111,7 @@ public final class AgentRunner {
         return new ToolResult(toolCall.id(), false, null, "Permission denied: " + reason);
     }
 
-    private String finalText(ModelResponse response) {
+    private String extractFinalText(ModelResponse response) {
         return response.content().stream()
                 .filter(TextBlock.class::isInstance)
                 .map(TextBlock.class::cast)
