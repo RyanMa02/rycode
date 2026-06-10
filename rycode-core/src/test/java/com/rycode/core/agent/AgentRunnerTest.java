@@ -9,7 +9,6 @@ import com.rycode.core.model.ModelResponse;
 import com.rycode.core.permission.PermissionDecision;
 import com.rycode.core.permission.PermissionService;
 import com.rycode.core.permission.UserConfirmationProvider;
-import com.rycode.core.tool.Tool;
 import com.rycode.core.tool.ToolCall;
 import com.rycode.core.tool.ToolDefinition;
 import com.rycode.core.tool.ToolRegistry;
@@ -41,7 +40,7 @@ class AgentRunnerTest {
                 toolUseResponse("tool-call-1", "echo", Map.of("text", "hello")),
                 textResponse("Tool said hello")
         ));
-        AgentRunner runner = newRunner(modelClient, new ToolRegistry(List.of(new EchoTool("echo"))));
+        AgentRunner runner = newRunner(modelClient, new ToolRegistry(List.of(TestTools.echo("echo"))));
 
         AgentRunResult result = runner.run(new AgentRunRequest("Use echo"));
 
@@ -58,7 +57,7 @@ class AgentRunnerTest {
         ));
         AgentRunner runner = newRunner(
                 modelClient,
-                new ToolRegistry(List.of(new EchoTool("echo"))),
+                new ToolRegistry(List.of(TestTools.echo("echo"))),
                 toolCall -> PermissionDecision.ask("needs confirmation"),
                 toolCall -> true
         );
@@ -78,7 +77,7 @@ class AgentRunnerTest {
         ));
         AgentRunner runner = newRunner(
                 modelClient,
-                new ToolRegistry(List.of(new EchoTool("echo"))),
+                new ToolRegistry(List.of(TestTools.echo("echo"))),
                 toolCall -> PermissionDecision.ask("user declined"),
                 toolCall -> false
         );
@@ -95,7 +94,7 @@ class AgentRunnerTest {
                 toolUseResponse("tool-call-1", "tracking", Map.of("text", "blocked")),
                 textResponse("Denied")
         ));
-        TrackingTool tool = new TrackingTool();
+        TestTools.TrackingTool tool = TestTools.tracking();
         AgentRunner runner = newRunner(
                 modelClient,
                 new ToolRegistry(List.of(tool)),
@@ -120,7 +119,7 @@ class AgentRunnerTest {
         ));
         AgentRunner runner = newRunner(
                 modelClient,
-                new ToolRegistry(List.of(new EchoTool("echo"))),
+                new ToolRegistry(List.of(TestTools.echo("echo"))),
                 toolCall -> PermissionDecision.allow("allowed by rule"),
                 toolCall -> {
                     throw new AssertionError("confirmation should not be requested for ALLOW");
@@ -137,7 +136,7 @@ class AgentRunnerTest {
         FakeModelClient modelClient = new FakeModelClient(List.of(textResponse("Done")));
         AgentRunner runner = newRunner(
                 modelClient,
-                new ToolRegistry(List.of(new EchoTool("first"), new EchoTool("second")))
+                new ToolRegistry(List.of(TestTools.echo("first"), TestTools.echo("second")))
         );
 
         runner.run(new AgentRunRequest("List tools"));
@@ -156,18 +155,18 @@ class AgentRunnerTest {
                 )),
                 textResponse("Done")
         ));
-        AgentRunner runner = newRunner(modelClient, new ToolRegistry(List.of(new EchoTool("echo"))));
+        AgentRunner runner = newRunner(modelClient, new ToolRegistry(List.of(TestTools.echo("echo"))));
 
         AgentRunResult result = runner.run(new AgentRunRequest("Use echo twice"));
 
         assertThat(result.finalText()).isEqualTo("Done");
         assertThat(modelClient.requests()).hasSize(2);
         assertThat(modelClient.requests().get(1).messages()).hasSize(3);
-        assertThat(modelClient.requests().get(1).messages().get(2).content())
-                .containsExactly(
-                        new ToolResultBlock(new ToolResult("tool-call-1", true, "one", null)),
-                        new ToolResultBlock(new ToolResult("tool-call-2", true, "two", null))
-                );
+        assertToolResults(
+                modelClient,
+                new ToolResult("tool-call-1", true, "one", null),
+                new ToolResult("tool-call-2", true, "two", null)
+        );
     }
 
     @Test
@@ -180,7 +179,7 @@ class AgentRunnerTest {
         ));
         AgentRunner runner = new AgentRunner(
                 modelClient,
-                new ToolRegistry(List.of(new EchoTool("echo"))),
+                new ToolRegistry(List.of(TestTools.echo("echo"))),
                 toolCall -> PermissionDecision.allow("test"),
                 toolCall -> false,
                 5,
@@ -207,6 +206,54 @@ class AgentRunnerTest {
     }
 
     @Test
+    void recordsSanitizedFailedToolResultPayloadWhenToolThrowsException() {
+        FakeModelClient modelClient = new FakeModelClient(List.of(
+                toolUseResponse("tool-call-1", "failing", Map.of("secret", "token-123")),
+                textResponse("Recovered")
+        ));
+        AgentRunner runner = newRunner(modelClient, new ToolRegistry(List.of(TestTools.failing())));
+
+        AgentRunResult result = runner.run(new AgentRunRequest("Use failing tool"));
+
+        assertThat(result.finalText()).isEqualTo("Recovered");
+        assertThat(modelClient.requests()).hasSize(2);
+        ToolResult toolResult = findToolResult(modelClient, "tool-call-1");
+        assertThat(toolResult.success()).isFalse();
+        assertThat(toolResult.output()).isNull();
+        assertThat(toolResult.error())
+                .contains("TOOL_EXECUTION_ERROR")
+                .doesNotContain("secret")
+                .doesNotContain("token-123")
+                .doesNotContain("boom")
+                .doesNotContain("IllegalStateException");
+    }
+
+    @Test
+    void keepsToolResultsInOrderWhenOneToolThrowsException() {
+        FakeModelClient modelClient = new FakeModelClient(List.of(
+                new ModelResponse(List.of(
+                        new ToolUseBlock(new ToolCall("tool-call-1", "echo", Map.of("text", "one"))),
+                        new ToolUseBlock(new ToolCall("tool-call-2", "failing", Map.of("secret", "token-123")))
+                )),
+                textResponse("Done")
+        ));
+        AgentRunner runner = newRunner(modelClient, new ToolRegistry(List.of(TestTools.echo("echo"), TestTools.failing())));
+
+        AgentRunResult result = runner.run(new AgentRunRequest("Use tools"));
+
+        assertThat(result.finalText()).isEqualTo("Done");
+        List<ToolResult> toolResults = toolResults(modelClient);
+        assertThat(toolResults).hasSize(2);
+        assertThat(toolResults.get(0))
+                .isEqualTo(new ToolResult("tool-call-1", true, "one", null));
+        ToolResult failedResult = toolResults.get(1);
+        assertThat(failedResult.toolCallId()).isEqualTo("tool-call-2");
+        assertThat(failedResult.success()).isFalse();
+        assertThat(failedResult.output()).isNull();
+        assertThat(failedResult.error()).contains("TOOL_EXECUTION_ERROR");
+    }
+
+    @Test
     void stopsWhenAgentLoopExceedsMaxIterations() {
         FakeModelClient modelClient = new FakeModelClient(List.of(
                 toolUseResponse("tool-call-1", "echo", Map.of("text", "one")),
@@ -214,7 +261,7 @@ class AgentRunnerTest {
         ));
         AgentRunner runner = new AgentRunner(
                 modelClient,
-                new ToolRegistry(List.of(new EchoTool("echo"))),
+                new ToolRegistry(List.of(TestTools.echo("echo"))),
                 toolCall -> PermissionDecision.allow("test"),
                 toolCall -> false,
                 2,
@@ -266,9 +313,27 @@ class AgentRunnerTest {
             String output,
             String error
     ) {
-        assertThat(modelClient.requests().get(1).messages())
-                .anySatisfy(message -> assertThat(message.content())
-                        .contains(new ToolResultBlock(new ToolResult(toolCallId, success, output, error))));
+        assertToolResults(modelClient, new ToolResult(toolCallId, success, output, error));
+    }
+
+    private static void assertToolResults(FakeModelClient modelClient, ToolResult... expectedResults) {
+        assertThat(toolResults(modelClient)).containsExactly(expectedResults);
+    }
+
+    private static ToolResult findToolResult(FakeModelClient modelClient, String toolCallId) {
+        return toolResults(modelClient).stream()
+                .filter(toolResult -> toolResult.toolCallId().equals(toolCallId))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private static List<ToolResult> toolResults(FakeModelClient modelClient) {
+        return modelClient.requests.get(1).messages().stream()
+                .flatMap(message -> message.content().stream())
+                .filter(ToolResultBlock.class::isInstance)
+                .map(ToolResultBlock.class::cast)
+                .map(ToolResultBlock::toolResult)
+                .toList();
     }
 
     private static final class FakeModelClient implements ModelClient {
@@ -288,50 +353,6 @@ class AgentRunnerTest {
 
         private List<ModelRequest> requests() {
             return List.copyOf(requests);
-        }
-    }
-
-    private static final class TrackingTool implements Tool {
-
-        private boolean executed;
-
-        @Override
-        public ToolDefinition definition() {
-            return new ToolDefinition("tracking", "Track execution", Map.of());
-        }
-
-        @Override
-        public ToolResult execute(ToolCall toolCall) {
-            executed = true;
-            return new ToolResult(toolCall.id(), true, "executed", null);
-        }
-
-        private boolean executed() {
-            return executed;
-        }
-    }
-
-    private static final class EchoTool implements Tool {
-
-        private final String name;
-
-        private EchoTool(String name) {
-            this.name = name;
-        }
-
-        @Override
-        public ToolDefinition definition() {
-            return new ToolDefinition(name, "Echo text", Map.of());
-        }
-
-        @Override
-        public ToolResult execute(ToolCall toolCall) {
-            return new ToolResult(
-                    toolCall.id(),
-                    true,
-                    toolCall.input().get("text").toString(),
-                    null
-            );
         }
     }
 }

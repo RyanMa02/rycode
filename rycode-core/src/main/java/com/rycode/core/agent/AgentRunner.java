@@ -11,9 +11,12 @@ import com.rycode.core.permission.PermissionDecision;
 import com.rycode.core.permission.PermissionDecisionType;
 import com.rycode.core.permission.PermissionService;
 import com.rycode.core.permission.UserConfirmationProvider;
+import com.rycode.core.tool.Tool;
 import com.rycode.core.tool.ToolCall;
 import com.rycode.core.tool.ToolRegistry;
 import com.rycode.core.tool.ToolResult;
+
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -23,7 +26,12 @@ import java.util.stream.Collectors;
 /**
  * @author Ryan
  */
+@Slf4j
 public final class AgentRunner {
+
+    private static final String TOOL_EXECUTION_ERROR = "Tool execution failed: TOOL_EXECUTION_ERROR. "
+            + "The tool did not complete; do not assume side effects succeeded. "
+            + "Retry only if the operation is idempotent and still necessary.";
 
     private final ModelClient modelClient;
     private final ToolRegistry toolRegistry;
@@ -103,8 +111,18 @@ public final class AgentRunner {
         }
 
         return toolRegistry.findByName(toolCall.name())
-                .map(tool -> tool.execute(toolCall))
+                .map(tool -> executeResolvedTool(tool, toolCall))
                 .orElseGet(() -> new ToolResult(toolCall.id(), false, null, "Tool not found: " + toolCall.name()));
+    }
+
+    private ToolResult executeResolvedTool(Tool tool, ToolCall toolCall) {
+        try {
+            return tool.execute(toolCall);
+        } catch (Exception e) {
+            log.warn("AgentRunner || executeResolvedTool. Unexpected tool execution failure. toolName: {}, toolCallId: {}, exceptionType: {}, ex: {}",
+                    toolCall.name(), toolCall.id(), e.getClass().getName(), e.getMessage(), e);
+            return new ToolResult(toolCall.id(), false, null, TOOL_EXECUTION_ERROR);
+        }
     }
 
     private ToolResult deniedToolResult(ToolCall toolCall, String reason) {
