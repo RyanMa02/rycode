@@ -27,9 +27,9 @@ These are not excluded goals; MVP implementation should keep extension points fo
 
 ## Design Reference
 
-Use `DESIGN.md` as the source of truth for current architecture and MVP scope.
+Use `docs/design/DESIGN.md` as the source of truth for current architecture and MVP scope.
 
-Before implementing features, check the relevant sections in `DESIGN.md`, especially:
+Before implementing features, check the relevant sections in `docs/design/DESIGN.md`, especially:
 
 - design principles
 - module boundaries
@@ -42,16 +42,31 @@ Before implementing features, check the relevant sections in `DESIGN.md`, especi
 - AgentEvent and Store abstractions
 - MVP boundaries and future extension points
 
+## Documentation Structure
+
+Project documentation is organized under `docs/`:
+
+```text
+docs/
+├── design/
+│   └── DESIGN.md          # Main architecture and design document
+├── task/
+│   └── TASK.md            # Implementation roadmap and task tracking
+└── gap/
+```
+
+Main documentation files use uppercase names (DESIGN.md, TASK.md) for easy identification.
+
 ## Documentation Maintenance
 
-`CLAUDE.md` and `DESIGN.md` are living project documents.
+`CLAUDE.md` and `docs/design/DESIGN.md` are living project documents.
 
 During future discussions and implementation:
 
-- Update `DESIGN.md` when architecture, module boundaries, MVP scope, future goals, or key decisions change.
+- Update `docs/design/DESIGN.md` when architecture, module boundaries, MVP scope, future goals, or key decisions change.
 - Update `CLAUDE.md` when project-level working instructions, design-reference rules, or long-term implementation constraints change.
 - Keep `CLAUDE.md` concise; use it as the project instruction index, not as a full design document.
-- Keep detailed design content in `DESIGN.md` to avoid unnecessary context growth.
+- Keep detailed design content in `docs/design/DESIGN.md` to avoid unnecessary context growth.
 - If conversation decisions contradict either file, confirm with the user, then update the relevant file before implementing based on the new decision.
 
 ## Working Style
@@ -112,4 +127,4 @@ A task is done only when:
 - Relevant tests pass.
 - Static/IDE diagnostics are checked when code changes.
 - Git status is understood before committing.
-- `DESIGN.md` and/or `CLAUDE.md` are updated if the task changes project decisions, architecture, scope, or long-term instructions.
+- `docs/design/DESIGN.md` and/or `CLAUDE.md` are updated if the task changes project decisions, architecture, scope, or long-term instructions.
